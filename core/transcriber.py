@@ -1,7 +1,7 @@
 import whisper
 import os
 import requests
-from pydub import AudioSegment
+import subprocess
 
 # Sarvam's sync STT-translate API rejects audio longer than 30s.
 # We slice each chunk into 25s pieces (with a 5s safety margin) before sending.
@@ -19,9 +19,7 @@ _model = None
 
 
 def load_model():
-
     global _model  
-
     if _model is None: 
         print(f"Loading Whisper model: {WHISPER_MODEL} ...")
         _model = whisper.load_model(WHISPER_MODEL) 
@@ -30,9 +28,7 @@ def load_model():
 
 
 def transcribe_chunk_whisper(chunk_path: str) -> str:
-
     model = load_model()  
-
     result = model.transcribe(chunk_path, task="transcribe")  
     return result["text"]  
 
@@ -63,33 +59,49 @@ def _send_to_sarvam(piece_path: str) -> str:
 def transcribe_chunk_sarvam(chunk_path: str) -> str:
     """
     Sarvam sync API only accepts ≤30s audio. We split this chunk into
-    25-second pieces, send each separately, and join the transcripts.
+    25-second pieces using ffmpeg, send each separately, and join the transcripts.
     """
     if not SARVAM_API_KEY:
         raise RuntimeError("SARVAM_API_KEY is not set in environment / .env")
 
-    audio = AudioSegment.from_wav(chunk_path)
-    piece_ms = SARVAM_PIECE_SECONDS * 1000
+    # Use ffmpeg segment tool to split audio into 25-second pieces without pydub
+    output_pattern = chunk_path + "_sv_%d.wav"
+    cmd = [
+        "ffmpeg", "-y", "-i", chunk_path,
+        "-f", "segment", "-segment_time", str(SARVAM_PIECE_SECONDS),
+        "-c", "copy", output_pattern
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Collect generated piece files
+    piece_paths = []
+    i = 0
+    while True:
+        piece_path = chunk_path + f"_sv_{i}.wav"
+        if os.path.exists(piece_path):
+            piece_paths.append(piece_path)
+            i += 1
+        else:
+            break
+
+    # Fallback if ffmpeg didn't split into multiple pieces (e.g. file is already short)
+    if not piece_paths and os.path.exists(chunk_path):
+        piece_paths = [chunk_path]
 
     full_text = ""
-    total_pieces = (len(audio) + piece_ms - 1) // piece_ms
+    total_pieces = len(piece_paths)
 
-    for i, start in enumerate(range(0, len(audio), piece_ms)):
-        piece = audio[start: start + piece_ms]
-        piece_path = f"{chunk_path}_sv_{i}.wav"
-        piece.export(piece_path, format="wav")
-
-        try:
-            print(f"  → Sarvam piece {i + 1}/{total_pieces} ...")
+    try:
+        for idx, piece_path in enumerate(piece_paths):
+            print(f"  → Sarvam piece {idx + 1}/{total_pieces} ...")
             full_text += _send_to_sarvam(piece_path) + " "
-        finally:
-            if os.path.exists(piece_path):
+    finally:
+        # Cleanup temporary pieces
+        for piece_path in piece_paths:
+            if piece_path != chunk_path and os.path.exists(piece_path):
                 os.remove(piece_path)
 
     return full_text.strip()
-
-   
-
 
 
 def transcribe_chunk(chunk_path: str, language: str = "english") -> str:
@@ -104,20 +116,15 @@ def transcribe_chunk(chunk_path: str, language: str = "english") -> str:
 
 
 def transcribe_all(chunks: list, language: str = "english") -> str:
-
     full_transcript = "" 
 
     engine = "Sarvam AI" if language.lower() == "hinglish" else "Whisper"
     print(f"Using {engine} for transcription.")
 
     for i, chunk in enumerate(chunks):  
-
         print(f"Transcribing chunk {i + 1}/{len(chunks)}...")
-
         text = transcribe_chunk(chunk, language=language)  
-
         full_transcript += text + " "  
 
     print("Transcription complete.")
-
-    return full_transcript.strip()  
+    return full_transcript.strip()
