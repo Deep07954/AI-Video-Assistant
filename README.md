@@ -3,6 +3,7 @@
 AI Video Assistant is a smart meeting intelligence project that turns audio/video content into structured insights. It can ingest a YouTube link or local media file, transcribe the conversation, summarize it, extract decisions and action items, and let you ask questions about the content using a retrieval-augmented generation (RAG) pipeline.
 
 This project is built for meeting recordings, webinars, interviews, and other spoken content where you need quick understanding and searchable context.
+LIVE DEMO- https://ai-video-assistant-caxqcrjya7jx8x7trdnrpu.streamlit.app/
 
 ## Features
 
